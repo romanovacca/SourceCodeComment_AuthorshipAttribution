@@ -1,0 +1,6 @@
+# a combination of word lemmatization + linearsvc model.
+################################.
+# initialize classifiers.
+################################.
+##show the detail.
+#for submit, no index

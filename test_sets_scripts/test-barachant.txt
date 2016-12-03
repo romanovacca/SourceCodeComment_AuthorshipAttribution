@@ -1,0 +1,31 @@
+# read eeg file.
+# get chanel names.
+# read eeg standard montage from mne.
+# events file.
+# read event file.
+# concatenate event file and data.
+# define channel type, the first is eeg, the last 6 are stimulations.
+# create and populate mne info structure.
+# create raw object.
+#eid = 'handstart'.
+# read data.
+# pick eeg signal.
+# filter data for alpha frequency and beta band.
+# note that mne implement a zero phase (filtfilt) filtering not compatible.
+# with the rule of future data..
+# get event posision corresponding to replace.
+# epochs signal for 1.5 second before the movement.
+# epochs signal for 1.5 second after the movement, this correspond to the.
+# rest period..
+# workaround to be able to concatenate epochs.
+#concatenate all epochs.
+# get data.
+# run csp.
+# compute spatial filtered spectrum.
+# prepare topoplot.
+# plot first pattern.
+# the parttern is sign invariant..
+# invert it for display purpose.
+# add axes for colorbar.
+# plot spectrum.
+# run cross validation

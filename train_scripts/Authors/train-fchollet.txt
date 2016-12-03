@@ -1,0 +1,361 @@
+import numpy as np
+import csv
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation
+from keras.utils import np_utils
+from sklearn import metrics
+from sklearn.cross_validation import KFold
+from sklearn.preprocessing import StandardScaler
+
+'''
+    This demonstrates how to reach a 0.80 ROC AUC score (local 4-fold validation)
+    in the Kaggle Nile virus prediction challenge. 
+
+    The model trains in a few seconds on CPU.
+'''
+
+# let's define some utils
+
+def get_weather_data():
+    weather_dic = {}
+    fi = csv.reader(open("../input/weather.csv"))
+    weather_head = fi.__next__()
+    for line in fi:
+        if line[0] == '1':
+            continue
+        weather_dic[line[1]] = line
+    weather_indexes = dict([(weather_head[i], i) for i in range(len(weather_head))])
+    return weather_dic, weather_indexes
+
+def process_line(line, indexes, weather_dic, weather_indexes):
+    def get(name):
+        return line[indexes[name]]
+
+    date = get("Date")
+    month = float(date.split('-')[1])
+    week = int(date.split('-')[1]) * 4 + int(date.split('-')[2]) / 7
+    latitude = float(get("Latitude"))
+    longitude = float(get("Longitude"))
+    tmax = float(weather_dic[date][weather_indexes["Tmax"]])
+    tmin = float(weather_dic[date][weather_indexes["Tmin"]])
+    tavg = float(weather_dic[date][weather_indexes["Tavg"]])
+    dewpoint = float(weather_dic[date][weather_indexes["DewPoint"]])
+    wetbulb = float(weather_dic[date][weather_indexes["WetBulb"]])
+    pressure = float(weather_dic[date][weather_indexes["StnPressure"]])
+
+    return [month, week, latitude, longitude, tmax, tmin, tavg, dewpoint, wetbulb, pressure]
+
+def preprocess_data(X, scaler=None):
+    if not scaler:
+        scaler = StandardScaler()
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
+
+def shuffle(X, y, seed=1337):
+    np.random.seed(seed)
+    shuffle = np.arange(len(y))
+    np.random.shuffle(shuffle)
+    X = X[shuffle]
+    y = y[shuffle]
+    return X, y
+
+def build_model(input_dim, output_dim):
+    model = Sequential()
+    model.add(Dense(32, input_dim=input_dim))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+
+    model.add(Dense(32))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+
+    model.add(Dense(output_dim))
+    model.add(Activation('softmax'))
+
+    model.compile(loss='categorical_crossentropy', optimizer="adadelta")
+    return model
+
+
+# now the actual script
+
+print("Processing training data...")
+
+rows = []
+labels = []
+fi = csv.reader(open("../input/train.csv"))
+head = fi.__next__()
+indexes = dict([(head[i], i) for i in range(len(head))])
+weather_dic, weather_indexes = get_weather_data()
+for line in fi:
+    rows.append(process_line(line, indexes, weather_dic, weather_indexes))
+    labels.append(float(line[indexes["WnvPresent"]]))
+
+X = np.array(rows)
+y = np.array(labels)
+
+X, y = shuffle(X, y)
+X, scaler = preprocess_data(X)
+Y = np_utils.to_categorical(y)
+
+input_dim = X.shape[1]
+output_dim = 2
+
+print("Validation...")
+
+nb_folds = 4
+kfolds = KFold(len(y), nb_folds)
+av_roc = 0.
+f = 0
+for train, valid in kfolds:
+    print('---'*20)
+    print('Fold', f)
+    print('---'*20)
+    f += 1
+    X_train = X[train]
+    X_valid = X[valid]
+    Y_train = Y[train]
+    Y_valid = Y[valid]
+    y_valid = y[valid]
+
+    print("Building model...")
+    model = build_model(input_dim, output_dim)
+
+    print("Training model...")
+
+    model.fit(X_train, Y_train, nb_epoch=100, batch_size=16, validation_data=(X_valid, Y_valid), verbose=0)
+    valid_preds = model.predict_proba(X_valid, verbose=0)
+    valid_preds = valid_preds[:, 1]
+    roc = metrics.roc_auc_score(y_valid, valid_preds)
+    print("ROC:", roc)
+    av_roc += roc
+
+print('Average ROC:', av_roc/nb_folds)
+
+print("Generating submission...")
+
+model = build_model(input_dim, output_dim)
+model.fit(X, Y, nb_epoch=100, batch_size=16, verbose=0)
+
+fi = csv.reader(open("../input/test.csv"))
+head = fi.__next__()
+indexes = dict([(head[i], i) for i in range(len(head))])
+rows = []
+ids = []
+for line in fi:
+    rows.append(process_line(line, indexes, weather_dic, weather_indexes))
+    ids.append(line[0])
+X_test = np.array(rows)
+X_test, _ = preprocess_data(X_test, scaler)
+
+preds = model.predict_proba(X_test, verbose=0)
+
+fo = csv.writer(open("keras-nn.csv", "w"), lineterminator="\n")
+fo.writerow(["Id","WnvPresent"])
+
+for i, item in enumerate(ids):
+    fo.writerow([ids[i], preds[i][1]])
+
+import pandas as pd
+import numpy as np
+from sklearn import preprocessing
+from keras.models import Sequential
+from keras.layers.core import Dense, Activation, Dropout
+
+# load training and test datasets
+train = pd.read_csv('../input/train_set.csv', parse_dates=[2,])
+test = pd.read_csv('../input/test_set.csv', parse_dates=[3,])
+
+tubes = pd.read_csv('../input/tube.csv')
+
+# create some new features
+train['year'] = train.quote_date.dt.year
+train['month'] = train.quote_date.dt.month
+train['dayofyear'] = train.quote_date.dt.dayofyear
+train['dayofweek'] = train.quote_date.dt.dayofweek
+train['day'] = train.quote_date.dt.day
+
+test['year'] = test.quote_date.dt.year
+test['month'] = test.quote_date.dt.month
+test['dayofyear'] = test.quote_date.dt.dayofyear
+test['dayofweek'] = test.quote_date.dt.dayofweek
+test['day'] = test.quote_date.dt.day
+
+train = pd.merge(train,tubes,on='tube_assembly_id',how='inner')
+test = pd.merge(test,tubes,on='tube_assembly_id',how='inner')
+
+train['material_id'].fillna('SP-9999',inplace=True)
+test['material_id'].fillna('SP-9999',inplace=True)
+
+# drop useless columns and create labels
+idx = test.id.values.astype(int)
+test = test.drop(['id', 'tube_assembly_id', 'quote_date'], axis = 1)
+labels = train.cost.values
+train = train.drop(['quote_date', 'cost', 'tube_assembly_id'], axis = 1)
+
+# convert data to numpy array
+train = np.array(train)
+test = np.array(test)
+
+# label encode the categorical variables
+for i in range(train.shape[1]):
+    if i in [0,3,10,16,17,18,19,20,21]:
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(train[:,i]) + list(test[:,i]))
+        train[:,i] = lbl.transform(train[:,i])
+        test[:,i] = lbl.transform(test[:,i])
+
+# object array to float
+X_train = train.astype(float)
+X_test = test.astype(float)
+
+# train on log(1+x) for RMSLE
+label_log = np.log1p(labels)
+
+# Keras model
+model = Sequential()
+model.add(Dense(128, input_dim=train.shape[1]))
+model.add(Activation('relu'))
+model.add(Dropout(0.15))
+model.add(Dense(128))
+model.add(Activation('relu'))
+model.add(Dropout(0.15))
+model.add(Dense(1))
+
+model.compile(loss='mse', optimizer='rmsprop')
+
+# train model, test on 15% hold out data
+model.fit(train, label_log, batch_size=32, nb_epoch=20, verbose=2, validation_split=0.15)
+
+# generate prediction file
+preds = np.expm1(model.predict(test, verbose=0).flatten())
+preds = pd.DataFrame({"id": idx, "cost": preds})
+preds.to_csv('benchmark.csv', index=False)
+
+import numpy as np
+
+from keras.models import Sequential
+from keras.layers.core import Dense, Activation, Dropout
+from keras.layers.advanced_activations import PReLU
+from keras.models import Sequential
+from keras.utils import np_utils
+
+from sklearn.preprocessing import StandardScaler
+
+
+def get_training_data():
+    filter_out = ['id', 'min_ANNmuon', 'production', 'mass', 'signal', 'SPDhits', 'IP', 'IPSig', 'isolationc']
+    f = open('../input/training.csv')
+    data = []
+    y = []
+    ids = []
+    for i, l in enumerate(f):
+        if i == 0:
+            labels = l.rstrip().split(',')
+            label_indices = dict((l, i) for i, l in enumerate(labels))
+            continue
+
+        values = l.rstrip().split(',')
+        filtered = []
+        for v, l in zip(values, labels):
+            if l not in filter_out:
+                filtered.append(float(v))
+
+        label = values[label_indices['signal']]
+        ID = values[0]
+
+        data.append(filtered)
+        y.append(float(label))
+        ids.append(ID)
+    return ids, np.array(data), np.array(y)
+
+
+def get_test_data():
+    filter_out = ['id', 'min_ANNmuon', 'production', 'mass', 'signal', 'SPDhits', 'IP', 'IPSig', 'isolationc']
+    f = open('../input/test.csv')
+    data = []
+    ids = []
+    for i, l in enumerate(f):
+        if i == 0:
+            labels = l.rstrip().split(',')
+            continue
+
+        values = l.rstrip().split(',')
+        filtered = []
+        for v, l in zip(values, labels):
+            if l not in filter_out:
+                filtered.append(float(v))
+
+        ID = values[0]
+        data.append(filtered)
+        ids.append(ID)
+    return ids, np.array(data)
+
+
+def preprocess_data(X, scaler=None):
+    if not scaler:
+        scaler = StandardScaler()
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
+
+# get training data
+ids, X, y = get_training_data()
+print('Data shape:', X.shape)
+
+# shuffle the data
+np.random.seed(1337)
+np.random.shuffle(X)
+np.random.seed(1337)
+np.random.shuffle(y)
+
+print('Signal ratio:', np.sum(y) / y.shape[0])
+
+# preprocess the data
+X, scaler = preprocess_data(X)
+y = np_utils.to_categorical(y)
+
+# split into training / evaluation data
+nb_train_sample = int(len(y) * 0.97)
+X_train = X[:nb_train_sample]
+X_eval = X[nb_train_sample:]
+y_train = y[:nb_train_sample]
+y_eval = y[nb_train_sample:]
+
+print('Train on:', X_train.shape[0])
+print('Eval on:', X_eval.shape[0])
+
+# deep pyramidal MLP, narrowing with depth
+model = Sequential()
+model.add(Dropout(0.13, input_shape=(X_train.shape[1],)))
+model.add(Dense(75))
+model.add(PReLU())
+
+model.add(Dropout(0.11))
+model.add(Dense(50))
+model.add(PReLU())
+
+model.add(Dropout(0.09))
+model.add(Dense(30))
+model.add(PReLU())
+
+model.add(Dropout(0.07))
+model.add(Dense(25))
+model.add(PReLU())
+
+model.add(Dense(2))
+model.add(Activation('softmax'))
+model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+
+# train model
+model.fit(X_train, y_train, batch_size=64, nb_epoch=85, validation_data=(X_eval, y_eval), verbose=2, show_accuracy=True)
+
+# generate submission
+ids, X = get_test_data()
+print('Data shape:', X.shape)
+X, scaler = preprocess_data(X, scaler)
+preds = model.predict(X, batch_size=256)[:, 1]
+with open('submission.csv', 'w') as f:
+    f.write('id,prediction\n')
+    for ID, p in zip(ids, preds):
+        f.write('%s,%.8f\n' % (ID, p))

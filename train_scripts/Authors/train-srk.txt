@@ -1,0 +1,227 @@
+# Importing the necessary modules #
+import numpy as np
+import pandas as pd
+from pandas.io.common import ZipFile
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Reading the expected rainfall column from train file #
+with ZipFile("../input/train_2013.csv.zip") as z:
+     f = z.open('train_2013.csv')
+train_exp = pd.read_csv(f,usecols=['Expected'])['Expected']
+
+# Create bins on rainfall for 0mm, 1mm, 2mm,....69mm, >=70mm #
+rain_bins_list = [-1] + list( range(70) ) + [max(train_exp)+1]
+dig_RR1 = np.digitize(train_exp, rain_bins_list, right=True)
+dig_RR1 = dig_RR1-1     # subtracting by 1 to have the pythonic index for digitized values
+
+# plot a histogram on the log count of occurrences #
+hist_bins = [-1]+list( range(max(dig_RR1)+2) )
+n, bins, patches = plt.hist(dig_RR1, hist_bins, histtype='bar', rwidth=0.8, log=True, align='left', color='green')
+
+# Change the x ticks and use a custom name #
+name = [str(i) for i in range(max(dig_RR1))]+['>=70']
+xticks = plt.xticks(range(max(dig_RR1)+1), name, size='small')
+
+# Set the title and labels for plot #
+plt.title("Histogram of Rainfall in the train set", fontsize="large", fontweight="bold")
+plt.xlabel("Rainfall in mm", fontsize="medium", fontweight="bold")
+plt.ylabel("Log of Number of Occurrences", fontsize="medium", fontweight="bold")
+plt.savefig("output.png")
+#plt.show()
+plt.close()
+
+import os
+import sys
+import csv
+import math
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import zipfile
+
+missing_values_list = ["-99900.0", "-99901.0", "-99903.0", "nan", "999.0", "-99000.0"]
+
+def removeMissingValues(val_list):
+        """
+        Fiunction to remove the missing values from the input list of values. 
+        """
+        out_list = []
+        for val in val_list:
+                if val not in missing_values_list:
+                        out_list.append(val)
+        return out_list
+
+def getRR1Mean(value):
+        """
+        Function to get variables from RR1 column
+        """
+        value_list = value.strip().split(' ')
+        value_list_wo_na = removeMissingValues(value_list)
+
+        # mean value of non-na values #
+        if value_list_wo_na != []:
+                value_arr_wo_na = np.array(value_list_wo_na, dtype='float')
+                return np.mean(np.abs(value_arr_wo_na))
+        else:
+                return 0
+
+def plotFig(out_file_name, cumulative=True):
+	"""
+	Function to plot the rainfall percentage distribution based on RR1 percentile bins
+	@param out_file_name : name of the file where the figure needs to be saved
+	@param cumulative : whether to compute the cumulative percentage
+
+	With minor modifications, this function could be used for other variables instead of RR1 as well
+	"""
+	# reading the required columns from train file #
+	z = zipfile.ZipFile('../input/train_2013.csv.zip')
+	train = pd.read_csv(z.open("train_2013.csv"), usecols=["RR1","Expected"])
+	# getting the mean value of RR1 after removing missing values #
+	train["RR1"] = train["RR1"].apply( lambda x: getRR1Mean(x) )
+
+	# get the percentile bin values of RR1 #
+	RR1 = np.array(train['RR1'][:]).copy()
+	exp = np.array(train['Expected'][:]).copy()
+	RR1_perc_list = [-0.01,0] + list( np.percentile(RR1[np.where(RR1>0.00000)[0]], list(range(2,101,1)) ))
+	dig_RR1 = np.digitize(RR1, RR1_perc_list, right=True)
+
+	# get the probability distribution of rainfall in each of the RR1 percentile bins #
+	rain_perc_list = [-1000] + list(range(70)) + [max(train["Expected"])]	
+	RR1_prob_arr = np.ones([len(RR1_perc_list)-1, len(rain_perc_list)-1])
+	for i,val in enumerate(np.unique(dig_RR1)):
+		temp_exp_vals = exp[np.where(dig_RR1==val)[0]]
+		temp_dig_exp = np.digitize(temp_exp_vals, rain_perc_list, right=True)
+		for j in range(1,len(rain_perc_list)):
+			RR1_prob_arr[i][j-1] = ( np.sum(temp_dig_exp == j) / float(len(temp_exp_vals)) )
+	if cumulative:
+		RR1_prob_arr = np.cumsum(RR1_prob_arr, axis=1)
+	RR1_prob_arr = RR1_prob_arr*100
+
+
+	# create a facet plot using seaborn. code adopted directly from the facet plot code present in seaborn gallery #
+	rainfall_mm = np.tile(range(71), 100)
+	percentile_bins = np.repeat(range(100), 71)
+	df = pd.DataFrame(np.c_[RR1_prob_arr.flat, rainfall_mm, percentile_bins],
+                  columns=["Percentage", "Rainfall", "RR1 Bin"])
+
+	grid = sns.FacetGrid(df, col="RR1 Bin", hue="RR1 Bin", col_wrap=10, size=1.5)
+	grid.map(plt.axhline, y=0, ls=":", c=".5")
+	grid.map(plt.plot, "Rainfall", "Percentage", marker="o", ms=4)
+	grid.set(xticks=[0,10,20,30,40,50,60,70], yticks=[0, 25, 50, 75, 100],
+         	xlim=(-.5, 72), ylim=(-0.5, 100.5))
+	grid.fig.tight_layout(w_pad=1)
+	grid.fig.savefig(out_file_name)
+
+if __name__ == "__main__":
+	plotFig("Cumulative_rainfall_percentage_for_RR1_percentile_bins1.png", cumulative=True)
+	plotFig("Rainfall_percentage_for_RR1_percentile_bins1.png", cumulative=False)
+
+import sqlite3 as sql
+import bokeh
+import seaborn as sb
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from datetime import datetime
+import networkx as nx
+
+""" Please enter the rank of the Kaggler whom you would like to profile """
+ENTER_THE_RANK_HERE = 18
+
+## Connecting to sqlite and getting the data ##
+conn = sql.connect("../input/database.sqlite")
+cur = conn.cursor()
+
+cur.execute('select a.DisplayName, a.Ranking, c.Ranking, d.CompetitionName, d.Deadline \
+from Users a \
+join \
+TeamMemberships b \
+on a.ID = b.UserID \
+join Teams c \
+on b.TeamID = c.ID \
+join Competitions d \
+on c.CompetitionID = d.ID \
+where a.Ranking={rnk} \
+order by d.Deadline'.format(rnk=ENTER_THE_RANK_HERE))
+result = cur.fetchall()
+
+query1 = 'select TeamId \
+from Users a \
+join \
+TeamMemberships b \
+on a.Id=b.UserId \
+where Ranking={rnk}'.format(rnk=ENTER_THE_RANK_HERE)
+query = 'select b.DisplayName, count(*) as Count, min(c.Ranking) as BestRank \
+from TeamMemberships a \
+join \
+Users b \
+on a.UserId=b.Id \
+join Teams c \
+on a.TeamID = c.ID \
+where a.TeamId in ( {tids} ) \
+group by b.DisplayName  \
+order by Count desc'.format(tids=query1)
+cur.execute(query)
+members_count = cur.fetchall()
+conn.close()
+
+## creating dataframes from the result to do some aggregation ##
+result_df = pd.DataFrame(result)
+result_df.columns = ["DisplayName", "KaggleRank", "CompRanking", "CompName","CompEndDate"]
+result_df["YearOfComp"] = result_df["CompEndDate"].apply(lambda x: datetime.strptime(x, "%Y-%m-%d %H:%M:%S").year)
+
+team_members_df = pd.DataFrame(members_count[1:])
+team_members_df.columns = ["TeamMate","Count","BestRank"]
+
+## Ranking histogram plot ##
+plt.figure()
+plt.hist(np.array(result_df["CompRanking"]), np.arange(0,1000,20), histtype = "bar", color='green')
+plt.title("Histogram of competition rankings of "+str(result_df["DisplayName"][0]))
+plt.ylabel("No. of competitions")
+plt.xlabel("Rank")
+plt.savefig('Plot_a_RankHist.png')
+plt.show()
+
+## Compeition ranking plot ##
+plt.figure()
+result_df["CompRanking"].plot(kind='line', color='red')
+plt.xticks(range(result_df.shape[0]), result_df['CompName'], size='small', rotation=270)
+plt.title("Ranking of "+str(result_df["DisplayName"][0])+" in different competitions")
+plt.ylabel("Rank")
+plt.savefig('Plot_b_CompetitionRanking.png')
+plt.show()
+
+## Median ranking plot ##
+year_group = result_df.groupby("YearOfComp").aggregate([np.median,'count'])
+fig, ax1 = plt.subplots()
+ax2 = ax1.twinx()
+width = 0.35
+ax1.bar(np.arange(year_group.shape[0]), year_group["CompRanking"]["median"], width, color='blue')
+ax1.set_xticks(np.arange(year_group.shape[0])+width)
+ax1.set_xticklabels(year_group.index, size='small', rotation=0, horizontalalignment='center')
+ax1.set_title("Performance of "+str(result_df["DisplayName"][0])+" across different years")
+ax1.set_xlabel("Year")
+ax1.set_ylabel("Median Competition Ranking", color='blue')
+ax2.bar(np.arange(year_group.shape[0])+width, year_group["CompRanking"]["count"], width, color='brown')
+ax2.set_ylabel("No of competitions", color='brown')
+ax2.grid(b=False)
+plt.savefig("Plot_c_PerformanceYear.png")
+plt.show()
+
+## Team mates bar chart #
+fig, ax1 = plt.subplots()
+ax2 = ax1.twinx()
+width = 0.35
+ax1.bar(np.arange(team_members_df.shape[0]), team_members_df["Count"], color='brown')
+ax1.set_xticks(np.arange(team_members_df.shape[0])+width)
+ax1.set_xticklabels(team_members_df.TeamMate, size='small', rotation=270, horizontalalignment='center')
+ax1.set_title("Team-mates of "+str(result_df["DisplayName"][0])+" in competitions")
+ax1.set_xlabel("Display Name")
+ax1.set_ylabel("No. of Competitions", color='brown')
+ax2.plot(np.arange(team_members_df.shape[0])+width, team_members_df["BestRank"], color='blue')
+ax2.set_ylabel("Best Rank", color='blue')
+ax2.grid(b=False)
+plt.savefig("Plot_d_TeamMates.png")
+plt.show()

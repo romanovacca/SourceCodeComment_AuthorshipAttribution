@@ -1,0 +1,401 @@
+
+import time; start_time = time.time()
+import warnings; warnings.filterwarnings('ignore');
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from PIL import Image
+from PIL import ImageFilter
+train_photos = pd.read_csv('../input/train_photo_to_biz_ids.csv')
+train_attr = pd.read_csv('../input/train.csv')
+train_id = pd.read_csv('../input/train_photo_to_biz_ids.csv') 
+test_photos = pd.read_csv('../input/test_photo_to_biz.csv')
+plt.rcParams['figure.figsize'] = (10.0, 10.0)
+plt.subplots_adjust(wspace=0, hspace=0)
+print("Train...")
+for x in range(25):
+        plt.subplot(5, 5, x+1)
+        im = Image.open('../input/train_photos/' + str(train_photos.photo_id[x]) + '.jpg')
+        im = im.resize((100, 100), Image.ANTIALIAS)
+        plt.imshow(im)
+        plt.axis('off')
+print("Test...")
+plt.rcParams['figure.figsize'] = (10.0, 10.0)
+plt.subplots_adjust(wspace=0, hspace=0)
+for x in range(25):
+        plt.subplot(5, 5, x+1)
+        im = Image.open('../input/test_photos/' + str(test_photos.photo_id[x]) + '.jpg')
+        im = im.resize((100, 100), Image.ANTIALIAS)
+        plt.imshow(im)
+        plt.axis('off')
+print("Train Photos", len(train_photos), len(train_photos.columns))
+train_photos.head()
+print("Train Attributes", len(train_attr), len(train_attr.columns))
+train_attr.head()
+print("Train ID", len(train_id), len(train_id.columns))
+train_id.head()
+print("Test Photos", len(test_photos), len(test_photos.columns))
+test_photos.head()
+label_notation = {0: 'good_for_lunch', 1: 'good_for_dinner', 2: 'takes_reservations',  3: 'outdoor_seating',
+                  4: 'restaurant_is_expensive', 5: 'has_alcohol', 6: 'has_table_service', 7: 'ambience_is_classy',
+                  8: 'good_for_kids'}
+for l in label_notation:
+    ids = train_attr[train_attr['labels'].str.contains(str(l))==True].business_id.tolist()[:9]
+    plt.rcParams['figure.figsize'] = (7.0, 7.0)
+    plt.subplots_adjust(wspace=0, hspace=0)
+    for x in range(9):
+        plt.subplot(3, 3, x+1)
+        im = Image.open('../input/train_photos/' + str(train_photos.photo_id[ids[x]]) + '.jpg')
+        im = im.resize((150, 150), Image.ANTIALIAS)
+        plt.imshow(im)
+        plt.axis('off')
+    fig = plt.figure()
+    fig.suptitle(label_notation[l])
+print("Start Training/Predictions: ", round(((time.time() - start_time)/60),2))
+from sklearn import ensemble
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.feature_extraction.image  import PatchExtractor
+from sklearn import pipeline
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.pipeline import FeatureUnion
+import multiprocessing
+import random; random.seed(2016);
+
+X_train = train_photos
+X_train = X_train.groupby(['business_id'], as_index=False).first()
+X_train = pd.merge(X_train, train_attr, how='left', on='business_id')
+X_train = df_all = pd.concat((X_train.groupby(['labels'], as_index=False).first(), X_train.groupby(['labels'], as_index=False).last()), axis=0, ignore_index=True)
+y_train = X_train['labels'].str.get_dummies(sep=' ')
+X_train = X_train.drop(['labels'],axis=1)
+X_test = test_photos.groupby(['business_id'], as_index=False).first()
+id_test = X_test["business_id"]
+
+print(len(X_train), len(y_train), len(X_test), len(id_test))
+
+def image_features(path, tt, buss_id, photo_id):
+    s=[tt, photo_id, buss_id]
+    im = Image.open(path)
+    xheight, xwidth = [100,100]
+    im = im.resize((xheight, xwidth), Image.ANTIALIAS)
+    qu = im.quantize(colors=10, kmeans=4) #if number of colors changes also change file columns number
+    crgb = qu.convert('RGB')
+    col_rank = sorted(crgb.getcolors(xwidth*xheight), reverse=True)
+    for i_rgb in range(len(col_rank)):
+        for t_rgb in range(4):
+            if t_rgb==0:
+                s.append(col_rank[i_rgb][0])
+            else:
+                s.append(col_rank[i_rgb][1][t_rgb-1])
+    im = im.crop((10, 10, 90, 90)) #remove edges
+    im = im.convert('1') #binarize
+    im_data = list(im.getdata())
+    im_data = [r if r == 0 else 1 for r in im_data]
+    st = str("".join(map(str,im_data)))
+    for i in range(0,len(im_data)//16):
+        t = str(st[16*i:16*i+8]) + "." + str(st[16*i+8:16*(i+1)])
+        s.append(float(t))
+    f = open("data.csv","a")
+    f.write((',').join(map(str, s)) + '\n')
+    f.close()
+    return
+
+class cust_img_features(BaseEstimator, TransformerMixin):
+    def fit(self, x, y=None):
+        return self
+    def transform(self, img_features):
+        d_col_drops=['photo_id','tt']
+        img_features = img_features.drop(d_col_drops,axis=1).values
+        return img_features
+
+class cust_patch_arr(BaseEstimator, TransformerMixin):
+    def fit(self, x, y=None):
+        return self
+    def transform(self, img_features):
+        if img_features["tt"][0]=="test":
+            img_features["pic"] = img_features["photo_id"].map(lambda x: np.asarray(Image.open('../input/test_photos/' + str(x) + '.jpg')))
+        else:
+            img_features["pic"] = img_features["photo_id"].map(lambda x: np.asarray(Image.open('../input/train_photos/' + str(x) + '.jpg')))
+        return img_features["pic"]
+f = open("data.csv","w");
+col = ['tt', 'photo_id','business_id']
+for i_rgb in range(10):
+    for t_rgb in range(4):
+        col.append("col_feature_"+str(i_rgb)+"_" + "krgb"[t_rgb])
+for i in range(400):
+     col.append("img_pixel_set"+str(i))
+f.write((',').join(map(str,col)) + '\n')
+f.close()
+print("Start Training/Predictions: ", round(((time.time() - start_time)/60),2))
+
+if __name__ == '__main__':
+    j = []
+    cpu = multiprocessing.cpu_count(); #print (cpu);
+    
+    for s_ in range(0,len(X_train),cpu):     #train
+        for i in range(cpu):
+            i_=s_+i
+            if (i_)<len(X_train):
+                filename='../input/train_photos/' + str(X_train.photo_id[i_]) + '.jpg'
+                p = multiprocessing.Process(target=image_features, args=(filename,'train', X_train.business_id[i_], X_train.photo_id[i_],))
+                j.append(p)
+                p.start()
+    j = []
+    for s_ in range(0,len(X_test),cpu):     #test
+        for i in range(cpu):
+            i_=s_+i
+            if (i_)<len(X_test):
+                filename='../input/test_photos/' + str(X_test.photo_id[i_]) + '.jpg'
+                p = multiprocessing.Process(target=image_features, args=(filename,'test', X_test.business_id[i_], X_test.photo_id[i_],))
+                j.append(p)
+                p.start()
+    
+    df_all = pd.read_csv('data.csv', index_col=None)
+    X_train = df_all[df_all['tt'] == 'train']
+    X_test = df_all[df_all['tt'] == 'test']
+    X_train = X_train.drop(['business_id'],axis=1)
+    X_test = X_test.drop(['business_id'],axis=1)
+    rfr = ensemble.RandomForestClassifier(random_state=2016, n_estimators=600 , n_jobs=-1)
+    ovr = OneVsRestClassifier(rfr, n_jobs=-1)
+    clf = pipeline.Pipeline([
+            ('union', FeatureUnion(
+                    transformer_list = [
+                        ('cst',  cust_img_features()),  
+                        #('patches', pipeline.Pipeline([('patch_arr', cust_patch_arr()), ('patch', patch1)]))
+                        ],
+                    transformer_weights = {
+                        'cst': 1.0,
+                        #'patches': 1.0
+                        },
+                n_jobs = -1
+                )), 
+        ('ovr', ovr)])
+    model = clf.fit(X_train, y_train)
+    y_pred = model.predict_proba(X_test)
+    df = pd.concat((pd.DataFrame(id_test), pd.DataFrame(y_pred)), axis=1)
+    df.columns = ['business_id','0','1','2','3','4','5','6','7','8']
+    df.to_csv('data1.csv',index=False)
+    print("End Training/Predictions: ", round(((time.time() - start_time)/60),2))
+df = pd.read_csv('data1.csv')
+a = [['business_id','labels']]
+for i in range(len(df)):
+    b = []
+    for j in [0,1,2,3,5,6,8]:
+        if df[str(j)][i] >= 0.1:
+            b.append(j)
+    a.append([df['business_id'][i]," ".join(map(str,b))])
+pd.DataFrame(a).to_csv('submission-4.csv',index=False, header=False)
+print('Done, not much better than random guessing but could increase train data too.')
+
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from xgboost.sklearn import XGBClassifier
+
+np.random.seed(42)
+
+#Loading data
+df_train = pd.read_csv('../input/train_users_2.csv')
+df_test = pd.read_csv('../input/test_users.csv')
+labels = df_train['country_destination'].values
+df_train = df_train.drop(['country_destination'], axis=1)
+id_test = df_test['id']
+piv_train = df_train.shape[0]
+
+#Creating a DataFrame with train+test data
+df_all = pd.concat((df_train, df_test), axis=0, ignore_index=True)
+#Removing id and date_first_booking
+df_all = df_all.drop(['id', 'date_first_booking'], axis=1)
+#Filling nan
+df_all = df_all.fillna(-1)
+
+#####Feature engineering#######
+#date_account_created
+dac = np.vstack(df_all.date_account_created.astype(str).apply(lambda x: list(map(int, x.split('-')))).values)
+df_all['dac_year'] = dac[:,0]
+df_all['dac_month'] = dac[:,1]
+df_all['dac_day'] = dac[:,2]
+df_all = df_all.drop(['date_account_created'], axis=1)
+
+#timestamp_first_active
+tfa = np.vstack(df_all.timestamp_first_active.astype(str).apply(lambda x: list(map(int, [x[:4],x[4:6],x[6:8],x[8:10],x[10:12],x[12:14]]))).values)
+df_all['tfa_year'] = tfa[:,0]
+df_all['tfa_month'] = tfa[:,1]
+df_all['tfa_day'] = tfa[:,2]
+df_all = df_all.drop(['timestamp_first_active'], axis=1)
+
+#Age
+av = df_all.age.values
+df_all['age'] = np.where(np.logical_or(av<14, av>90), -1, av)
+df_all['age_year'] = np.where(av > 1900, -1, av)
+
+#One-hot-encoding features
+ohe_feats = ['gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser']
+for f in ohe_feats:
+    df_all_dummy = pd.get_dummies(df_all[f], prefix=f)
+    df_all = df_all.drop([f], axis=1)
+    df_all = pd.concat((df_all, df_all_dummy), axis=1)
+
+#Splitting train and test
+vals = df_all.values
+X = vals[:piv_train]
+le = LabelEncoder()
+y = le.fit_transform(labels)   
+X_test = vals[piv_train:]
+
+print("Training")
+#Classifier
+xgb = XGBClassifier(max_depth=6, learning_rate=0.2, n_estimators=43,
+                    objective='multi:softprob', subsample=0.6, colsample_bytree=0.6, seed=0, missing=-1)                  
+xgb.fit(X, y)
+
+print("Predicting")
+y_pred = xgb.predict_proba(X_test) 
+
+print("Preparing submission")
+#Taking the 5 classes with highest probabilities
+ids = []  #list of ids
+cts = []  #list of countries
+for i in range(len(id_test)):
+    idx = id_test[i]
+    ids += [idx] * 5
+    cts += le.inverse_transform(np.argsort(y_pred[i])[::-1])[:5].tolist()
+
+#Generate submission
+sub = pd.DataFrame(np.column_stack((ids, cts)), columns=['id', 'country'])
+sub.to_csv('sub_jap_02.csv',index=False)
+
+
+import pandas as pd
+import numpy as np 
+from sklearn import preprocessing
+import xgboost as xgb
+from sklearn.feature_extraction import DictVectorizer
+
+
+def xgboost_pred(train,labels,test):
+    params = {}
+    params["objective"] = "reg:linear"
+    params["eta"] = 0.01
+    params["min_child_weight"] = 5
+    params["subsample"] = 0.8
+    params["colsample_bytree"] = 0.8
+    params["scale_pos_weight"] = 1.0
+    params["silent"] = 1
+    params["max_depth"] = 8
+
+    plst = list(params.items())
+
+    #Using 5000 rows for early stopping. 
+    offset = 4000
+
+    num_rounds = 10000
+    xgtest = xgb.DMatrix(test)
+
+    #create a train and validation dmatrices 
+    xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
+    xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
+
+    #train using early stopping and predict
+    watchlist = [(xgtrain, 'train'),(xgval, 'val')]
+    model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=50)
+    preds1 = model.predict(xgtest)
+
+
+    #reverse train and labels and use different 5k for early stopping. 
+    # this adds very little to the score but it is an option if you are concerned about using all the data. 
+    train = train[::-1,:]
+    labels = np.log(labels[::-1])
+
+    xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
+    xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
+
+    watchlist = [(xgtrain, 'train'),(xgval, 'val')]
+    model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=50)
+    preds2 = model.predict(xgtest)
+
+
+    #combine predictions
+    #since the metric only cares about relative rank we don't need to average
+    preds = preds1*2.6 + preds2*7.4
+    return preds
+
+#load train and test 
+train  = pd.read_csv('../input/train.csv', index_col=0)
+test  = pd.read_csv('../input/test.csv', index_col=0)
+
+
+labels = train.Hazard
+train.drop('Hazard', axis=1, inplace=True)
+
+train_s = train
+test_s = test
+
+
+train_s.drop('T2_V10', axis=1, inplace=True)
+train_s.drop('T2_V7', axis=1, inplace=True)
+train_s.drop('T2_V6', axis=1, inplace=True)
+train_s.drop('T2_V4', axis=1, inplace=True)
+train_s.drop('T2_V3', axis=1, inplace=True)
+train_s.drop('T2_V8', axis=1, inplace=True)
+train_s.drop('T2_V11', axis=1, inplace=True)
+train_s.drop('T2_V12', axis=1, inplace=True)
+
+train_s.drop('T1_V13', axis=1, inplace=True)
+train_s.drop('T1_V10', axis=1, inplace=True)
+train_s.drop('T1_V6', axis=1, inplace=True)
+train_s.drop('T1_V9', axis=1, inplace=True)
+train_s.drop('T1_V17', axis=1, inplace=True)
+
+test_s.drop('T2_V10', axis=1, inplace=True)
+test_s.drop('T2_V7', axis=1, inplace=True)
+test_s.drop('T2_V6', axis=1, inplace=True)
+test_s.drop('T2_V4', axis=1, inplace=True)
+test_s.drop('T2_V3', axis=1, inplace=True)
+test_s.drop('T2_V8', axis=1, inplace=True)
+test_s.drop('T2_V11', axis=1, inplace=True)
+test_s.drop('T2_V12', axis=1, inplace=True)
+
+test_s.drop('T1_V13', axis=1, inplace=True)
+test_s.drop('T1_V10', axis=1, inplace=True)
+test_s.drop('T1_V6', axis=1, inplace=True)
+test_s.drop('T1_V9', axis=1, inplace=True)
+test_s.drop('T1_V17', axis=1, inplace=True)
+
+columns = train.columns
+test_ind = test.index
+
+
+train_s = np.array(train_s)
+test_s = np.array(test_s)
+
+# label encode the categorical variables
+for i in range(train_s.shape[1]):
+    lbl = preprocessing.LabelEncoder()
+    lbl.fit(list(train_s[:,i]) + list(test_s[:,i]))
+    train_s[:,i] = lbl.transform(train_s[:,i])
+    test_s[:,i] = lbl.transform(test_s[:,i])
+
+train_s = train_s.astype(float)
+test_s = test_s.astype(float)
+
+
+preds1 = xgboost_pred(train_s,labels,test_s)
+
+#model_2 building
+
+train = train.T.to_dict().values()
+test = test.T.to_dict().values()
+
+vec = DictVectorizer()
+train = vec.fit_transform(train)
+test = vec.transform(test)
+
+preds2 = xgboost_pred(train,labels,test)
+
+
+preds = 0.6 * preds1 + 0.4 * preds2
+
+#generate solution
+preds = pd.DataFrame({"Id": test_ind, "Hazard": preds})
+preds = preds.set_index('Id')
+preds.to_csv('xgboost_benchmark_kk.csv')

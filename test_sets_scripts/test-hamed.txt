@@ -1,0 +1,8 @@
+# linear algebra.
+# data processing, csv file i/o (e.g. pd.read_csv).
+# working hours.
+# lunch break.
+# weekends.
+# summer holidays..
+# new years..
+# x-mass

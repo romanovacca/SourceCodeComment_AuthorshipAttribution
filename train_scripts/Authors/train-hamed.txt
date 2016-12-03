@@ -1,0 +1,57 @@
+
+# We'll use the pandas library to read CSV files into dataframes
+import pandas as pd
+from sklearn import ensemble, tree
+
+# The competition datafiles are in the directory ../input
+# List the files we have available to work with
+
+
+# Read competition data files:
+train = pd.read_csv("../input/training.csv")
+test  = pd.read_csv("../input/test.csv")
+sub = pd.read_csv("../input/sample_submission.csv")
+#variables = list(set([i for i in test]) - set(['SPDhits']))
+variables = list(set([i for i in test]) - set([]))
+
+print(variables)
+
+base = tree.DecisionTreeClassifier(criterion='gini',
+                                   #max_depth=maxdpt(),
+                                   max_features=.48,
+                                   #max_leaf_nodes=None, 
+                                   min_samples_leaf=82,
+                                   splitter= 'best')
+
+clf = ensemble.AdaBoostClassifier(n_estimators=13, learning_rate=0.098643,base_estimator=base)
+clf.fit(train[variables], train['signal'])
+
+sub['prediction'] = clf.predict_proba(test[variables])[:, 1]
+sub.to_csv('AdaBoost.csv', index=False, sep=',')
+
+# Write summaries of the train and test sets to the log
+
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+plt.rcParams['figure.figsize'] = (16,5)
+
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+
+for p in top10:
+    plt.plot(train[train.place_id == p].x, train[train.place_id == p].y,'.')
+plt.xlim(0,10)
+plt.ylim(0,10)
+plt.show()
+
+plt.rcParams['figure.figsize'] = (16,5)
+power = np.sqrt((ffty*ffty.conj()).real)
+plt.semilogx(power[1:(len(power)//2)])
+
+fftx = np.fft.fft(np.histogram(train.x, bins = 2**10, normed=True)[0])
+ffty = np.fft.fft(np.histogram(train.y, bins = 2**10, normed=True)[0])
+#fft[0] = 0

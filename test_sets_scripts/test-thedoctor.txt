@@ -1,0 +1,11 @@
+# get training data.
+# shuffle the data.
+# preprocess the data.
+# split into training / evaluation data.
+#nb_train_sample = int(len(y) * 0.78) # used to be 0.97, 0.78 is better, 0.83 possible.
+#x_eval = x.
+#y_eval = y.
+#print('eval on:', x_eval.shape[0]).
+# deep pyramidal mlp, narrowing with depth.
+# train model.
+# generate submission

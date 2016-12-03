@@ -1,0 +1,25 @@
+################################################################################.
+# collecting some data and calculating a popularity feature for restaurants.
+# popularity = number of photos per business in dataset / length dataset.
+################################################################################.
+# creating our codebook (image patch clusters) using batch processing.
+# open, resize (150x150), and greyscale the images.
+# extract 30 random patches (20x20).
+# process batch every 100 images (3000 patches).
+# normalizing (local brightness and contrast normalization).
+################################################################################.
+# creating train set.
+# open, resize (150x150), and greyscale the images.
+# extract 30 random patches (20x20).
+# normalization.
+# labels.
+# add some hand-crafted features.
+# add cluster predictions per patch.
+################################################################################.
+# creating test set.
+# open, resize (150x150), and greyscale the images.
+# extract 30 random patches (20x20).
+# normalization.
+# labels.
+# add some hand-crafted features.
+# add cluster predictions per patch

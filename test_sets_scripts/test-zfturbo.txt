@@ -1,0 +1,7 @@
+# test which library read and resize jpg files faster.
+# load as grayscale.
+# reduce size.
+# load as grayscale.
+# reduce size.
+# load as grayscale.
+# reduce size

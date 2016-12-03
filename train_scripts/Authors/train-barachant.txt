@@ -1,0 +1,530 @@
+import numpy as np
+import pandas as pd
+from mne.io import RawArray
+from mne.channels import read_montage
+from mne import create_info, find_events, Epochs, concatenate_raws, pick_types
+from mne import compute_raw_data_covariance
+from mne.viz import plot_image_epochs, plot_topomap
+from mne.viz import plot_topomap, plot_topo
+from scipy.linalg import eigh, inv
+import matplotlib.pyplot as plt
+
+from glob import glob
+
+def fit_xdawn(evoked, signal_cov):
+    """Minimal implementation of xdawn."""
+    cov_evoked = np.cov(evoked)
+    evals, evecs = eigh(cov_evoked, signal_cov)
+    evecs = evecs[:, np.argsort(evals)[::-1]]  # sort eigenvectors
+    evecs /= np.sqrt(np.sum(evecs ** 2, axis=0))
+    A = inv(evecs.T)
+    return evecs, A
+
+def apply_xdawn(epochs, V, A, n_components=3):
+    """Xdawn denoising."""
+    data = epochs.get_data()
+    sources = np.dot(V.T, data).transpose((1,0,2))
+    sources[:,n_components:,:] = 0
+    data = np.dot(A, sources).transpose((1,0,2))
+    epochs._data = data
+    return epochs
+
+def creat_mne_raw_object(fname, read_events=True):
+    """Create a mne raw instance from csv file."""
+    # Read EEG file
+    data = pd.read_csv(fname)
+
+    # get chanel names
+    ch_names = list(data.columns[1:])
+
+    # read EEG standard montage from mne
+    montage = read_montage('standard_1005', ch_names)
+
+    ch_type = ['eeg']*len(ch_names)
+    data = 1e-6*np.array(data[ch_names]).T
+
+    if read_events:
+        # events file
+        ev_fname = fname.replace('_data', '_events')
+        # read event file
+        events = pd.read_csv(ev_fname)
+        events_names = events.columns[1:]
+        events_data = np.array(events[events_names]).T
+
+        # define channel type, the first is EEG, the last 6 are stimulations
+        ch_type.extend(['stim']*6)
+        ch_names.extend(events_names)
+        # concatenate event file and data
+        data = np.concatenate((data, events_data))
+
+    # create and populate MNE info structure
+    info = create_info(ch_names, sfreq=500.0, ch_types=ch_type,
+                       montage=montage)
+    info['filename'] = fname
+
+    # create raw object
+    raw = RawArray(data, info, verbose=False)
+
+    return raw
+
+subject = 3
+
+fnames =  glob('../input/train/subj%d_series[3-8]_data.csv' % (subject))
+fnames.sort()
+# read and concatenate all the files
+raw = [creat_mne_raw_object(fname) for fname in fnames]
+raw = concatenate_raws(raw)
+# pick eeg signal
+picks = pick_types(raw.info, eeg=True)    
+
+raw.filter(1, 20, picks=picks)
+
+events = find_events(raw,stim_channel='HandStart')
+epochs = Epochs(raw, events, {'HandStart' : 1}, -0.2, 0.6, proj=False,
+                picks=picks, baseline=None, preload=True, 
+                add_eeg_ref=True, verbose =False)
+  
+evoked = epochs.average()
+
+evoked.plot(show=False)
+plt.savefig('evoked_time.png' ,bbox_inches='tight', dpi=300)
+
+plot_topo(evoked, show=False)
+plt.savefig('evoked_topo.png' ,bbox_inches='tight', facecolor='k', dpi=300)
+
+evoked.plot_topomap(times=[-0.1, 0, 0.1, 0.15, 0.25, 0.3], show=False)
+plt.savefig('evoked_topomap.png' ,bbox_inches='tight', dpi=300)
+
+plot_image_epochs(epochs, picks=[-3], sigma=5, vmin=-75, vmax=75, show=False)
+plt.savefig('epochs_image.png' ,bbox_inches='tight', dpi=300)
+
+
+
+#denoising with Xdawn
+signal_cov = compute_raw_data_covariance(raw, picks=picks).data
+
+V, A = fit_xdawn(evoked.data, signal_cov)
+epochs_dn = apply_xdawn(epochs, V, A, n_components=4)
+plot_image_epochs(epochs_dn, picks=[-3], sigma=5, vmin=-70, vmax=70, show=False)
+plt.savefig('epochs_xdawn_image.png' ,bbox_inches='tight', dpi=300)
+
+
+# Generate html file
+with open("output.html","wb") as outfile:
+    html = """<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<title>VEP - Alexandre Barachant</title>
+		<meta name="robots" content="noindex,nofollow,noodp,nonothing,goaway">
+		<link href='https://fonts.googleapis.com/css?family=Open+Sans:400,800' rel='stylesheet' type='text/css'>
+		<style>
+			* { margin:0; padding: 0;}
+			body { font-family: "Open Sans",Verdana,sans-serif; margin: 30px auto; width: 700px; }
+			p { font-size: 18px; line-height: 27px; padding-bottom: 27px; color: #111; text-align: justify; }
+			h1 { font-weight: 800; font-size: 33px; color: #2C3E50; padding-bottom: 10px;}
+			h2 { font-weight: 800; font-size: 22px; color: #2C3E50; padding-bottom: 10px; }
+			h3 { font-weight: 800; font-size: 18px; color: #34495E; padding-bottom: 10px; }
+			small { color: #7F8C8D; }
+			ul.panes { display: block; overflow: hidden; list-style-type: none; padding: 10px 0px;}
+			li.pane { float: left; width: 300px; margin-right: 40px; padding-bottom: 40px; }
+			ul { list-style-type: none; }
+			span { display: block; width: 50px; padding-right: 15px; text-align: right; height: 20px; float: left; }
+			li ul li { color: #7F8C8D; }
+			li ul li:first-child { color: #111; }
+			.node { font: 400 14px "Open Sans", Verdana, sans-serif; fill: #333; cursor:pointer;}
+			.node:hover {fill: #000;}
+			.link {stroke: steelblue; stroke-opacity:.4;fill: none; pointer-events: none;}
+			.node:hover,.node--source,.node--target { font-weight: 700;}
+			.node--source { fill: #2ca02c;}
+			.node--target { fill: #d62728;}
+			.link--source,.link--target { stroke-opacity: 1; stroke-width: 2px;}
+			.link--source { stroke: #d62728;}
+			.link--target { stroke: #2ca02c;}
+                   img { width: 600px; display: block; margin: 0 auto; }
+		</style>
+	</head>
+	<body>
+		<h1>Visual Evoked Potential (VEP)</h1>
+            <p>Evoked potential are time locked brain potential elicited by 
+            an external stimultation. They are generally related to the sensory
+            or the cognitive system. In our case, the subject is instructed to
+            start the movement when a LED light ON. Therefore, we expect to see
+            a potential over the visual cortex in response to this event.</p>
+                       
+		<h2>VEP Analysis</h2>
+            <p>VEP analysis are usually done by averaging time-domain signal
+            across several trials in order to reduce noise (which is asumed to be zeros
+            mean and not in phase with the event). 
+            VEPs must be in sync with the event you are 
+            using to epoch signal. In this case, we don't have access to the
+            LedON events, but depending on with how much reproducibility the 
+            subject start moving the hand, we can use the Event Handstart to epochs signal.</p>
+            
+            <p>In this example, I used the subject 3. I skept the 2 first series
+            because they showed a bad reproducibility on the timing. We obtain 198 'HandStart' events.
+            Signal is bandpass filtered between 1 and 20 Hz (VEP are low frequency) and then epoched
+            from -200ms to 600ms with respect to the onset of the event.</p>
+            
+		<img src="evoked_time.png">
+  
+            <p>The average show a first negative peak around 0ms, and a second positive at 150ms.
+            typical VEP appears arrond 300ms after the events. Therefore we can guess that the 
+            subject start the movement in 150ms after the cue.</p>
+             
+            <img src="evoked_topo.png">
+            <img src="evoked_topomap.png">
+
+            <p>The first figure represent the individual potential for each electrode, with respect to their position on the scalp.
+            The second figure represent the topomap of the amplitude of the VEP for different timing.
+            We see the strongest response over the visual cortex (back of the head).
+            Interestingly, we can also see a response on the frontal electrodes. This may be an occular artifact,
+            or an effect of the referencing of the signal.</p>            
+            
+            <h2>Epochs denoising with xDawn</h2>
+            
+            <p>On the single trial basis, epochs are really noisy and VEP are hard to detect.
+            We offen use spatial filtering (linear combination of electrodes) like ICA to denoise the signal.
+            Here is a plot of each epochs before denoising.</p>
+            
+            <img src="epochs_image.png">
+            
+            <p> In this example, I used the algorithm xDAWN [1,2] to denoise the signal. 
+            xDAWN build spatial filters in order to maximize the signal to noise ratio of the 
+            evoked response. After spatial filtering, noisy components are zeroed and back projected 
+            in the sensor space. This dramatically increase the quality of each response.</p>
+            
+            <img src="epochs_xdawn_image.png">
+            
+            <p>Interestingly, we can see a time shift in the latency on the VEP peak, probably due to
+            mental fatigue of the subject.</p>
+            
+		    <p> A full implementation of xDawn algorithm is provided in the last code of MNE.
+		    Since it wasn't available here, I made a minimalist implementation.</p>
+		    
+		    <h2>References</h2>
+		    <p>[1] Rivet, B., Souloumiac, A., Attina, V., & Gibert, G. (2009). xDAWN
+            algorithm to enhance evoked potentials: application to brain-computer
+            interface. Biomedical Engineering, IEEE Transactions on, 56(8), 2035-2043.</p>
+   
+            <p>[2] Rivet, B., Cecotti, H., Souloumiac, A., Maby, E., & Mattout, J. (2011,
+            August). Theoretical analysis of xDAWN algorithm: application to an
+            efficient sensor selection in a P300 BCI. In Signal Processing Conference,
+            2011 19th European (pp. 1382-1386). IEEE.</p>
+      </body>
+</html>"""
+
+    outfile.write(html.encode('utf-8'))
+
+    print(__doc__)
+
+import numpy as np
+import pandas as pd
+from mne.io import RawArray
+from mne.channels import read_montage
+from mne.epochs import concatenate_epochs
+from mne import create_info, find_events, Epochs, concatenate_raws, pick_types
+from mne.decoding import CSP
+
+from sklearn.linear_model import LogisticRegression
+from glob import glob
+
+from scipy.signal import butter, lfilter, convolve, boxcar
+from joblib import Parallel, delayed
+
+def creat_mne_raw_object(fname,read_events=True):
+    """Create a mne raw instance from csv file"""
+    # Read EEG file
+    data = pd.read_csv(fname)
+    
+    # get chanel names
+    ch_names = list(data.columns[1:])
+    
+    # read EEG standard montage from mne
+    montage = read_montage('standard_1005',ch_names)
+
+    ch_type = ['eeg']*len(ch_names)
+    data = 1e-6*np.array(data[ch_names]).T
+    
+    if read_events:
+        # events file
+        ev_fname = fname.replace('_data','_events')
+        # read event file
+        events = pd.read_csv(ev_fname)
+        events_names = events.columns[1:]
+        events_data = np.array(events[events_names]).T
+        
+        # define channel type, the first is EEG, the last 6 are stimulations
+        ch_type.extend(['stim']*6)
+        ch_names.extend(events_names)
+        # concatenate event file and data
+        data = np.concatenate((data,events_data))
+        
+    # create and populate MNE info structure
+    info = create_info(ch_names,sfreq=500.0, ch_types=ch_type, montage=montage)
+    info['filename'] = fname
+    
+    # create raw object 
+    raw = RawArray(data,info,verbose=False)
+    
+    return raw
+
+subjects = range(1,13)
+ids_tot = []
+pred_tot = []
+
+# design a butterworth bandpass filter 
+freqs = [7, 30]
+b,a = butter(5,np.array(freqs)/250.0,btype='bandpass')
+
+# CSP parameters
+# Number of spatial filter to use
+nfilters = 4
+
+# convolution
+# window for smoothing features
+nwin = 250
+
+# training subsample
+subsample = 10
+
+# submission file
+submission_file = 'beat_the_benchmark.csv'
+cols = ['HandStart','FirstDigitTouch',
+        'BothStartLoadPhase','LiftOff',
+        'Replace','BothReleased']
+
+for subject in subjects:
+    epochs_tot = []
+    y = []
+
+    ################ READ DATA ################################################
+    fnames =  glob('../input/train/subj%d_series*_data.csv' % (subject))
+    
+    # read and concatenate all the files
+    raw = concatenate_raws([creat_mne_raw_object(fname) for fname in fnames])
+       
+    # pick eeg signal
+    picks = pick_types(raw.info,eeg=True)
+    
+    # Filter data for alpha frequency and beta band
+    # Note that MNE implement a zero phase (filtfilt) filtering not compatible
+    # with the rule of future data.
+    # Here we use left filter compatible with this constraint. 
+    # The function parallelized for speeding up the script
+    raw._data[picks] = np.array(Parallel(n_jobs=-1)(delayed(lfilter)(b,a,raw._data[i]) for i in picks))
+    
+    ################ CSP Filters training #####################################
+    # get event posision corresponding to HandStart
+    events = find_events(raw,stim_channel='HandStart', verbose=False)
+    # epochs signal for 2 second after the event
+    epochs = Epochs(raw, events, {'during' : 1}, 0, 2, proj=False,
+                    picks=picks, baseline=None, preload=True,
+                    add_eeg_ref=False, verbose=False)
+    
+    epochs_tot.append(epochs)
+    y.extend([1]*len(epochs))
+    
+    # epochs signal for 2 second before the event, this correspond to the 
+    # rest period.
+    epochs_rest = Epochs(raw, events, {'before' : 1}, -2, 0, proj=False,
+                    picks=picks, baseline=None, preload=True,
+                    add_eeg_ref=False, verbose=False)
+    
+    # Workaround to be able to concatenate epochs with MNE
+    epochs_rest.times = epochs.times
+    
+    y.extend([-1]*len(epochs_rest))
+    epochs_tot.append(epochs_rest)
+        
+    # Concatenate all epochs
+    epochs = concatenate_epochs(epochs_tot)
+    
+    # get data 
+    X = epochs.get_data()
+    y = np.array(y)
+    
+    # train CSP
+    csp = CSP(n_components=nfilters, reg='lws')
+    csp.fit(X,y)
+    
+    ################ Create Training Features #################################
+    # apply csp filters and rectify signal
+    feat = np.dot(csp.filters_[0:nfilters],raw._data[picks])**2
+    
+    # smoothing by convolution with a rectangle window    
+    feattr = np.array(Parallel(n_jobs=-1)(delayed(convolve)(feat[i],boxcar(nwin),'full') for i in range(nfilters)))
+    feattr = np.log(feattr[:,0:feat.shape[1]])
+    
+    # training labels
+    # they are stored in the 6 last channels of the MNE raw object
+    labels = raw._data[32:]
+    
+    ################ Create test Features #####################################
+    # read test data 
+    fnames =  glob('../input/test/subj%d_series*_data.csv' % (subject))
+    raw = concatenate_raws([creat_mne_raw_object(fname, read_events=False) for fname in fnames])
+    raw._data[picks] = np.array(Parallel(n_jobs=-1)(delayed(lfilter)(b,a,raw._data[i]) for i in picks))
+    
+    # read ids
+    ids = np.concatenate([np.array(pd.read_csv(fname)['id']) for fname in fnames])
+    ids_tot.append(ids)
+    
+    # apply preprocessing on test data
+    feat = np.dot(csp.filters_[0:nfilters],raw._data[picks])**2
+    featte = np.array(Parallel(n_jobs=-1)(delayed(convolve)(feat[i],boxcar(nwin),'full') for i in range(nfilters)))
+    featte = np.log(featte[:,0:feat.shape[1]])
+    
+    ################ Train classifiers ########################################
+    lr = LogisticRegression()
+    pred = np.empty((len(ids),6))
+    for i in range(6):
+        print('Train subject %d, class %s' % (subject, cols[i]))
+        lr.fit(feattr[:,::subsample].T,labels[i,::subsample])
+        pred[:,i] = lr.predict_proba(featte.T)[:,1]
+    
+    pred_tot.append(pred)
+
+# create pandas object for sbmission
+submission = pd.DataFrame(index=np.concatenate(ids_tot),
+                          columns=cols,
+                          data=np.concatenate(pred_tot))
+
+# write file
+submission.to_csv(submission_file,index_label='id',float_format='%.5f') 
+
+import numpy as np
+import pandas as pd
+
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+from glob import glob
+import os
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cross_validation import LeaveOneLabelOut
+from sklearn.metrics import roc_auc_score
+
+from joblib import Parallel, delayed
+
+#############function to read data###########
+
+def prepare_data_train(fname):
+    """ read and prepare training data """
+    # Read data
+    data = pd.read_csv(fname)
+    # events file
+    events_fname = fname.replace('_data','_events')
+    # read event file
+    labels= pd.read_csv(events_fname)
+    clean=data.drop(['id' ], axis=1)#remove id
+    labels=labels.drop(['id' ], axis=1)#remove id
+    return  clean,labels
+
+def prepare_data_test(fname):
+    """ read and prepare test data """
+    # Read data
+    data = pd.read_csv(fname)
+    return data
+
+scaler= StandardScaler()
+def data_preprocess_train(X):
+    X_prep=scaler.fit_transform(X)
+    #do here your preprocessing
+    return X_prep
+def data_preprocess_test(X):
+    X_prep=scaler.transform(X)
+    #do here your preprocessing
+    return X_prep
+
+def fit(X,y):
+    # Do here you training
+    clf = LogisticRegression()
+    clf.fit(X,y)
+    return clf
+
+def predict(clf,X):
+    # do here your prediction
+    preds = clf.predict_proba(X)
+    return np.atleast_2d(preds[:,clf.classes_==1])
+    
+# training subsample.if you want to downsample the training data
+subsample = 100
+#series used for CV
+series = range(2,9)
+#######columns name for labels#############
+cols = ['HandStart','FirstDigitTouch',
+        'BothStartLoadPhase','LiftOff',
+        'Replace','BothReleased']
+
+#######number of subjects###############
+subjects = range(1,13)
+auc_tot = []
+pred_tot = []
+y_tot = []
+###loop on subjects and 8 series for train data + 2 series for test data
+for subject in subjects:
+    y_raw= []
+    raw = []
+    sequence = []
+    ################ READ DATA ################################################
+    
+    for ser in series:
+      fname =  '../input/train/subj%d_series%d_data.csv' % (subject,ser)
+      data,labels=prepare_data_train(fname)
+      raw.append(data)
+      y_raw.append(labels)
+      sequence.extend([ser]*len(data))
+
+    X = pd.concat(raw)
+    y = pd.concat(y_raw)
+    #transform in numpy array
+    #transform train data in numpy array
+    X = np.asarray(X.astype(float))
+    y = np.asarray(y.astype(float))
+    sequence = np.asarray(sequence)
+
+
+    ################ Train classifiers ########################################
+    cv = LeaveOneLabelOut(sequence)
+    pred = np.empty((X.shape[0],6))
+
+    for train, test in cv:
+        X_train = X[train]
+        X_test = X[test]
+        y_train = y[train]
+        #apply preprocessing
+        X_train=data_preprocess_train(X_train)
+        X_test=data_preprocess_test(X_test)
+        clfs = Parallel(n_jobs=6)(delayed(fit)(X_train[::subsample,:],y_train[::subsample,i]) for i in range(6))
+        preds = Parallel(n_jobs=6)(delayed(predict)(clfs[i],X_test) for i in range(6))
+        pred[test,:] = np.concatenate(preds,axis=1)
+    pred_tot.append(pred)
+    y_tot.append(y)
+    # get AUC
+    auc = [roc_auc_score(y[:,i],pred[:,i]) for i in range(6)]     
+    auc_tot.append(auc)
+    print(auc)
+
+pred_tot = np.concatenate(pred_tot)
+y_tot = np.concatenate(y_tot)
+global_auc = [roc_auc_score(y_tot[:,i],pred_tot[:,i]) for i in range(6)]
+
+print('Global AUC : %.4f' % np.mean(global_auc))
+
+auc_tot = np.asarray(auc_tot)
+results = pd.DataFrame(data=auc_tot, columns=cols, index=subjects)
+results.to_csv('results_cv_auc.csv')
+
+plt.figure(figsize=(4,3))
+results.mean(axis=1).plot(kind='bar')
+plt.xlabel('Subject')
+plt.ylabel('AUC')
+plt.title('CV auc for each subject')
+plt.savefig('cross_val_auc_subject.png' ,bbox_inches='tight')
+
+plt.figure(figsize=(4,3))
+results.mean(axis=0).plot(kind='bar')
+plt.ylabel('AUC')
+plt.title('CV auc for each class')
+plt.savefig('cross_val_auc_class.png' ,bbox_inches='tight')

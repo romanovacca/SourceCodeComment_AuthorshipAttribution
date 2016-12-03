@@ -1,0 +1,4 @@
+# remove line below to run locally - be careful you need more than 8gb ram.
+# junk cols - some feature engineering needed here.
+# junk cols - some feature engineering needed here.
+# load data set and target values

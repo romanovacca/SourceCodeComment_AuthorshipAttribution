@@ -1,0 +1,3 @@
+# reading the file as dataframe and getting summary #.
+# grouping the rows based on id and get the rainfall #.
+# plotting a scatter plot #

@@ -1,0 +1,18 @@
+# import the random forest package.
+#print you can execute arbitrary python code.
+# (2) create the submission file with passengerids from the test file.
+# prepare the data.
+# set up gender.
+# fix missing ages.
+# find median ages.
+# create agefill column.
+# fill in missing ages.
+# fill in missing fare.
+# create familysize.
+#drop unused colums.
+# create the random forest object which will include all the parameters.
+# for the fit.
+# fit the training data to the survived labels and create the decision trees.
+# take the same decision trees and run it on the test data.
+#print(output).
+# (4) create final submission file

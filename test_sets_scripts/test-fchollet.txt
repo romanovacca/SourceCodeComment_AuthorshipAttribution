@@ -1,0 +1,5 @@
+# read data.
+# convert list of labels to binary class matrix.
+# pre-processing: divide by max and substract mean.
+# here's a deep dumb mlp (ddmlp).
+# we'll use categorical xent for the loss, and rmsprop as the optimizer

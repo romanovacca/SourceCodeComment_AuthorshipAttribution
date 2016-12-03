@@ -1,0 +1,9 @@
+# gather some features.
+# remove nans.
+# use some properties directly.
+# label encode some features.
+# calculate time competition open time in months.
+# promo open time in months.
+# indicate that sales on that day are in promo interval.
+## start of main script.
+# make data

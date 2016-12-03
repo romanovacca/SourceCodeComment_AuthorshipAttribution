@@ -1,0 +1,11 @@
+# load training and test datasets.
+# create some new features.
+# drop useless columns and create labels.
+# convert data to numpy array.
+# label encode the categorical variables.
+# object array to float.
+# i like to train on log(1+x) for rmsle ;).
+# the choice is yours :).
+# fit a random forest model.
+# get predictions from the model, convert them and dump them!.
+# swipe right on tinder ;)

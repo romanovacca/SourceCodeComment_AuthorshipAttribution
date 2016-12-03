@@ -1,0 +1,941 @@
+import numpy as np
+np.random.seed(2016)
+
+import os
+import glob
+import cv2
+import math
+import pickle
+import datetime
+import pandas as pd
+import statistics
+
+from sklearn.cross_validation import train_test_split
+from sklearn.cross_validation import KFold
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.optimizers import SGD
+from keras.utils import np_utils
+from keras.models import model_from_json
+from sklearn.metrics import log_loss
+from scipy.misc import imread, imresize
+
+use_cache = 1
+# color type: 1 - grey, 3 - rgb
+color_type_global = 1
+
+
+# color_type = 1 - gray
+# color_type = 3 - RGB
+def get_im_skipy(path, img_rows, img_cols, color_type=1):
+    # Load as grayscale
+    if color_type == 1:
+        img = imread(path, True)
+    elif color_type == 3:
+        img = imread(path)
+    # Reduce size
+    resized = imresize(img, (img_cols, img_rows))
+    return resized
+
+
+def get_im_cv2(path, img_rows, img_cols, color_type=1):
+    # Load as grayscale
+    if color_type == 1:
+        img = cv2.imread(path, 0)
+    elif color_type == 3:
+        img = cv2.imread(path)
+    # Reduce size
+    resized = cv2.resize(img, (img_cols, img_rows))
+    return resized
+
+
+def get_driver_data():
+    dr = dict()
+    path = os.path.join('..', 'input', 'driver_imgs_list.csv')
+    print('Read drivers data')
+    f = open(path, 'r')
+    line = f.readline()
+    while (1):
+        line = f.readline()
+        if line == '':
+            break
+        arr = line.strip().split(',')
+        dr[arr[2]] = arr[0]
+    f.close()
+    return dr
+
+
+def load_train(img_rows, img_cols, color_type=1):
+    X_train = []
+    y_train = []
+    driver_id = []
+
+    driver_data = get_driver_data()
+
+    print('Read train images')
+    for j in range(10):
+        print('Load folder c{}'.format(j))
+        path = os.path.join('..', 'input', 'train', 'c' + str(j), '*.jpg')
+        files = glob.glob(path)
+        for fl in files:
+            flbase = os.path.basename(fl)
+            img = get_im_cv2(fl, img_rows, img_cols, color_type)
+            X_train.append(img)
+            y_train.append(j)
+            driver_id.append(driver_data[flbase])
+
+    unique_drivers = sorted(list(set(driver_id)))
+    print('Unique drivers: {}'.format(len(unique_drivers)))
+    print(unique_drivers)
+    return X_train, y_train, driver_id, unique_drivers
+
+
+def load_test(img_rows, img_cols, color_type=1):
+    print('Read test images')
+    path = os.path.join('..', 'input', 'test', '*.jpg')
+    files = glob.glob(path)
+    X_test = []
+    X_test_id = []
+    total = 0
+    thr = math.floor(len(files)/10)
+    for fl in files:
+        flbase = os.path.basename(fl)
+        img = get_im_cv2(fl, img_rows, img_cols, color_type)
+        X_test.append(img)
+        X_test_id.append(flbase)
+        total += 1
+        if total%thr == 0:
+            print('Read {} images from {}'.format(total, len(files)))
+
+    return X_test, X_test_id
+
+
+def cache_data(data, path):
+    if os.path.isdir(os.path.dirname(path)):
+        file = open(path, 'wb')
+        pickle.dump(data, file)
+        file.close()
+    else:
+        print('Directory doesnt exists')
+
+
+def restore_data(path):
+    data = dict()
+    if os.path.isfile(path):
+        file = open(path, 'rb')
+        data = pickle.load(file)
+    return data
+
+
+def save_model(model):
+    json_string = model.to_json()
+    if not os.path.isdir('cache'):
+        os.mkdir('cache')
+    open(os.path.join('cache', 'architecture.json'), 'w').write(json_string)
+    model.save_weights(os.path.join('cache', 'model_weights.h5'), overwrite=True)
+
+
+def read_model():
+    model = model_from_json(open(os.path.join('cache', 'architecture.json')).read())
+    model.load_weights(os.path.join('cache', 'model_weights.h5'))
+    return model
+
+
+def split_validation_set(train, target, test_size):
+    random_state = 51
+    X_train, X_test, y_train, y_test = train_test_split(train, target, test_size=test_size, random_state=random_state)
+    return X_train, X_test, y_train, y_test
+
+
+def create_submission(predictions, test_id, info):
+    result1 = pd.DataFrame(predictions, columns=['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9'])
+    result1.loc[:, 'img'] = pd.Series(test_id, index=result1.index)
+    now = datetime.datetime.now()
+    if not os.path.isdir('subm'):
+        os.mkdir('subm')
+    suffix = info + '_' + str(now.strftime("%Y-%m-%d-%H-%M"))
+    sub_file = os.path.join('subm', 'submission_' + suffix + '.csv')
+    result1.to_csv(sub_file, index=False)
+
+
+def read_and_normalize_train_data(img_rows, img_cols, color_type=1):
+    cache_path = os.path.join('cache', 'train_r_' + str(img_rows) + '_c_' + str(img_cols) + '_t_' + str(color_type) + '.dat')
+    if not os.path.isfile(cache_path) or use_cache == 0:
+        train_data, train_target, driver_id, unique_drivers = load_train(img_rows, img_cols, color_type)
+        cache_data((train_data, train_target, driver_id, unique_drivers), cache_path)
+    else:
+        print('Restore train from cache!')
+        (train_data, train_target, driver_id, unique_drivers) = restore_data(cache_path)
+
+    train_data = np.array(train_data, dtype=np.uint8)
+    train_target = np.array(train_target, dtype=np.uint8)
+    train_data = train_data.reshape(train_data.shape[0], color_type, img_rows, img_cols)
+    train_target = np_utils.to_categorical(train_target, 10)
+    train_data = train_data.astype('float32')
+    train_data /= 255
+    print('Train shape:', train_data.shape)
+    print(train_data.shape[0], 'train samples')
+    return train_data, train_target, driver_id, unique_drivers
+
+
+def read_and_normalize_test_data(img_rows, img_cols, color_type=1):
+    cache_path = os.path.join('cache', 'test_r_' + str(img_rows) + '_c_' + str(img_cols) + '_t_' + str(color_type) + '.dat')
+    if not os.path.isfile(cache_path) or use_cache == 0:
+        test_data, test_id = load_test(img_rows, img_cols, color_type)
+        cache_data((test_data, test_id), cache_path)
+    else:
+        print('Restore test from cache!')
+        (test_data, test_id) = restore_data(cache_path)
+
+    test_data = np.array(test_data, dtype=np.uint8)
+    test_data = test_data.reshape(test_data.shape[0], color_type, img_rows, img_cols)
+    test_data = test_data.astype('float32')
+    test_data /= 255
+    print('Test shape:', test_data.shape)
+    print(test_data.shape[0], 'test samples')
+    return test_data, test_id
+
+
+def dict_to_list(d):
+    ret = []
+    for i in d.items():
+        ret.append(i[1])
+    return ret
+
+
+def merge_several_folds_mean(data, nfolds):
+    a = np.array(data[0])
+    for i in range(1, nfolds):
+        a += np.array(data[i])
+    a /= nfolds
+    return a.tolist()
+
+
+def merge_several_folds_geom(data, nfolds):
+    a = np.array(data[0])
+    for i in range(1, nfolds):
+        a *= np.array(data[i])
+    a = np.power(a, 1/nfolds)
+    return a.tolist()
+
+
+def copy_selected_drivers(train_data, train_target, driver_id, driver_list):
+    data = []
+    target = []
+    index = []
+    for i in range(len(driver_id)):
+        if driver_id[i] in driver_list:
+            data.append(train_data[i])
+            target.append(train_target[i])
+            index.append(i)
+    data = np.array(data, dtype=np.float32)
+    target = np.array(target, dtype=np.float32)
+    index = np.array(index, dtype=np.uint32)
+    return data, target, index
+
+
+def create_model_v1(img_rows, img_cols, color_type=1):
+    nb_classes = 10
+    # number of convolutional filters to use
+    nb_filters = 8
+    # size of pooling area for max pooling
+    nb_pool = 2
+    # convolution kernel size
+    nb_conv = 2
+    model = Sequential()
+    model.add(Convolution2D(nb_filters, nb_conv, nb_conv,
+                            border_mode='valid',
+                            input_shape=(color_type, img_rows, img_cols)))
+    model.add(Activation('relu'))
+    model.add(Convolution2D(nb_filters, nb_conv, nb_conv))
+    model.add(Activation('relu'))
+    model.add(MaxPooling2D(pool_size=(nb_pool, nb_pool)))
+    model.add(Dropout(0.25))
+
+    model.add(Flatten())
+    model.add(Dense(128))
+    model.add(Activation('relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(nb_classes))
+    model.add(Activation('softmax'))
+
+    sgd = SGD(lr=0.1, decay=0, momentum=0, nesterov=False)
+    model.compile(loss='categorical_crossentropy', optimizer=sgd)
+    return model
+
+
+def run_single():
+    # input image dimensions
+    img_rows, img_cols = 24, 32
+    batch_size = 32
+    nb_epoch = 2
+    random_state = 51
+
+    train_data, train_target, driver_id, unique_drivers = read_and_normalize_train_data(img_rows, img_cols, color_type_global)
+    test_data, test_id = read_and_normalize_test_data(img_rows, img_cols, color_type_global)
+
+    yfull_train = dict()
+    yfull_test = []
+    unique_list_train = ['p002', 'p012', 'p014', 'p015', 'p016', 'p021', 'p022', 'p024',
+                     'p026', 'p035', 'p039', 'p041', 'p042', 'p045', 'p047', 'p049',
+                     'p050', 'p051', 'p052', 'p056', 'p061', 'p064', 'p066', 'p072',
+                     'p075']
+    X_train, Y_train, train_index = copy_selected_drivers(train_data, train_target, driver_id, unique_list_train)
+    unique_list_valid = ['p081']
+    X_valid, Y_valid, test_index = copy_selected_drivers(train_data, train_target, driver_id, unique_list_valid)
+
+    print('Start Single Run')
+    print('Split train: ', len(X_train), len(Y_train))
+    print('Split valid: ', len(X_valid), len(Y_valid))
+    print('Train drivers: ', unique_list_train)
+    print('Test drivers: ', unique_list_valid)
+
+    model = create_model_v1(img_rows, img_cols, color_type_global)
+    model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch,
+              show_accuracy=True, verbose=1, validation_data=(X_valid, Y_valid))
+
+    # score = model.evaluate(X_valid, Y_valid, show_accuracy=True, verbose=0)
+    # print('Score log_loss: ', score[0])
+
+    predictions_valid = model.predict(X_valid, batch_size=128, verbose=1)
+    score = log_loss(Y_valid, predictions_valid)
+    print('Score log_loss: ', score)
+
+    # Store valid predictions
+    for i in range(len(test_index)):
+        yfull_train[test_index[i]] = predictions_valid[i]
+
+    # Store test predictions
+    test_prediction = model.predict(test_data, batch_size=128, verbose=1)
+    yfull_test.append(test_prediction)
+
+    print('Final log_loss: {}, rows: {} cols: {} epoch: {}'.format(score, img_rows, img_cols, nb_epoch))
+    info_string = 'loss_' + str(score) \
+                    + '_r_' + str(img_rows) \
+                    + '_c_' + str(img_cols) \
+                    + '_ep_' + str(nb_epoch)
+
+    test_res = merge_several_folds_mean(yfull_test, 1)
+    create_submission(test_res, test_id, info_string)
+
+
+run_single()
+
+
+import datetime
+import pandas as pd
+import numpy as np
+from sklearn.cross_validation import train_test_split
+import xgboost as xgb
+import random
+from operator import itemgetter
+import zipfile
+from sklearn.metrics import roc_auc_score
+import time
+random.seed(2016)
+
+
+def create_feature_map(features):
+    outfile = open('xgb.fmap', 'w')
+    for i, feat in enumerate(features):
+        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+    outfile.close()
+
+
+def get_importance(gbm, features):
+    create_feature_map(features)
+    importance = gbm.get_fscore(fmap='xgb.fmap')
+    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
+    return importance
+
+
+def intersect(a, b):
+    return list(set(a) & set(b))
+
+
+def print_features_importance(imp):
+    for i in range(len(imp)):
+        print("# " + str(imp[i][1]))
+        print('output.remove(\'' + imp[i][0] + '\')')
+
+
+def run_default_test(train, test, features, target, random_state=0):
+    eta = 0.1
+    max_depth = 5
+    subsample = 0.8
+    colsample_bytree = 0.8
+    start_time = time.time()
+
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "binary:logistic",
+        "booster" : "gbtree",
+        "eval_metric": "auc",
+        "eta": eta,
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state
+    }
+    num_boost_round = 260
+    early_stopping_rounds = 20
+    test_size = 0.1
+
+    X_train, X_valid = train_test_split(train, test_size=test_size, random_state=random_state)
+    y_train = X_train[target]
+    y_valid = X_valid[target]
+    dtrain = xgb.DMatrix(X_train[features], y_train)
+    dvalid = xgb.DMatrix(X_valid[features], y_valid)
+
+    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+
+    print("Validating...")
+    check = gbm.predict(xgb.DMatrix(X_valid[features]), ntree_limit=gbm.best_ntree_limit)
+    score = roc_auc_score(X_valid[target].values, check)
+    print('Check error value: {:.6f}'.format(score))
+
+    imp = get_importance(gbm, features)
+    print('Importance array: ', imp)
+
+    print("Predict test set...")
+    test_prediction = gbm.predict(xgb.DMatrix(test[features]), ntree_limit=gbm.best_ntree_limit)
+
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return test_prediction.tolist(), score
+
+
+def create_submission(score, test, prediction):
+    # Make Submission
+    now = datetime.datetime.now()
+    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    print('Writing submission: ', sub_file)
+    f = open(sub_file, 'w')
+    f.write('id,probability\n')
+    total = 0
+    for id in test['id']:
+        str1 = str(id) + ',' + str(prediction[total])
+        str1 += '\n'
+        total += 1
+        f.write(str1)
+    f.close()
+
+
+
+def get_features(train, test):
+    trainval = list(train.columns.values)
+    testval = list(test.columns.values)
+    output = intersect(trainval, testval)
+    output.remove('itemID_1')
+    output.remove('itemID_2')
+    return output
+
+
+def prep_train():
+    testing = 0
+    start_time = time.time()
+
+    types1 = {
+        'itemID_1': np.dtype(int),
+        'itemID_2': np.dtype(int),
+        'isDuplicate': np.dtype(int),
+        'generationMethod': np.dtype(int),
+    }
+
+    types2 = {
+        'itemID': np.dtype(int),
+        'categoryID': np.dtype(int),
+        'title': np.dtype(str),
+        'description': np.dtype(str),
+        'images_array': np.dtype(str),
+        'attrsJSON': np.dtype(str),
+        'price': np.dtype(float),
+        'locationID': np.dtype(int),
+        'metroID': np.dtype(float),
+        'lat': np.dtype(float),
+        'lon': np.dtype(float),
+    }
+
+    print("Load ItemPairs_train.csv")
+    pairs = pd.read_csv("../input/ItemPairs_train.csv", dtype=types1)
+    # Add 'id' column for easy merge
+    print("Load ItemInfo_train.csv")
+    items = pd.read_csv("../input/ItemInfo_train.csv", dtype=types2)
+    items.fillna(-1, inplace=True)
+    location = pd.read_csv("../input/Location.csv")
+    category = pd.read_csv("../input/Category.csv")
+
+    train = pairs
+    train = train.drop(['generationMethod'], axis=1)
+
+    print('Add text features...')
+    items['len_title'] = items['title'].str.len()
+    items['len_description'] = items['description'].str.len()
+    items['len_attrsJSON'] = items['attrsJSON'].str.len()
+
+    print('Merge item 1...')
+    item1 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon', 
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item1 = pd.merge(item1, category, how='left', on='categoryID', left_index=True)
+    item1 = pd.merge(item1, location, how='left', on='locationID', left_index=True)
+
+    item1 = item1.rename(
+        columns={
+            'itemID': 'itemID_1',
+            'categoryID': 'categoryID_1',
+            'parentCategoryID': 'parentCategoryID_1',
+            'price': 'price_1',
+            'locationID': 'locationID_1',
+            'regionID': 'regionID_1',
+            'metroID': 'metroID_1',
+            'lat': 'lat_1',
+            'lon': 'lon_1',
+            'len_title': 'len_title_1',
+            'len_description': 'len_description_1',
+            'len_attrsJSON': 'len_attrsJSON_1',
+        }
+    )
+
+    # Add item 1 data
+    train = pd.merge(train, item1, how='left', on='itemID_1', left_index=True)
+
+    print('Merge item 2...')
+    item2 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon', 
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item2 = pd.merge(item2, category, how='left', on='categoryID', left_index=True)
+    item2 = pd.merge(item2, location, how='left', on='locationID', left_index=True)
+
+    item2 = item2.rename(
+        columns={
+            'itemID': 'itemID_2',
+            'categoryID': 'categoryID_2',
+            'parentCategoryID': 'parentCategoryID_2',
+            'price': 'price_2',
+            'locationID': 'locationID_2',
+            'regionID': 'regionID_2',
+            'metroID': 'metroID_2',
+            'lat': 'lat_2',
+            'lon': 'lon_2',
+            'len_title': 'len_title_2',
+            'len_description': 'len_description_2',
+            'len_attrsJSON': 'len_attrsJSON_2'
+        }
+    )
+
+    # Add item 2 data
+    train = pd.merge(train, item2, how='left', on='itemID_2', left_index=True)
+
+    # Create same arrays
+    print('Create same arrays')
+    train['price_same'] = np.equal(train['price_1'], train['price_2']).astype(np.int32)
+    train['locationID_same'] = np.equal(train['locationID_1'], train['locationID_2']).astype(np.int32)
+    train['categoryID_same'] = np.equal(train['categoryID_1'], train['categoryID_2']).astype(np.int32)
+    train['regionID_same'] = np.equal(train['regionID_1'], train['regionID_2']).astype(np.int32)
+    train['metroID_same'] = np.equal(train['metroID_1'], train['metroID_2']).astype(np.int32)
+    train['lat_same'] = np.equal(train['lat_1'], train['lat_2']).astype(np.int32)
+    train['lon_same'] = np.equal(train['lon_1'], train['lon_2']).astype(np.int32)
+
+    # print(train.describe())
+    print('Create train data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return train
+
+
+def prep_test():
+    start_time = time.time()
+
+    types1 = {
+        'itemID_1': np.dtype(int),
+        'itemID_2': np.dtype(int),
+        'id': np.dtype(int),
+    }
+
+    types2 = {
+        'itemID': np.dtype(int),
+        'categoryID': np.dtype(int),
+        'title': np.dtype(str),
+        'description': np.dtype(str),
+        'images_array': np.dtype(str),
+        'attrsJSON': np.dtype(str),
+        'price': np.dtype(float),
+        'locationID': np.dtype(int),
+        'metroID': np.dtype(float),
+        'lat': np.dtype(float),
+        'lon': np.dtype(float),
+    }
+
+    print("Load ItemPairs_test.csv")
+    pairs = pd.read_csv("../input/ItemPairs_test.csv", dtype=types1)
+    print("Load ItemInfo_testcsv")
+    items = pd.read_csv("../input/ItemInfo_test.csv", dtype=types2)
+    items.fillna(-1, inplace=True)
+    location = pd.read_csv("../input/Location.csv")
+    category = pd.read_csv("../input/Category.csv")
+
+    train = pairs
+
+    print('Add text features...')
+    items['len_title'] = items['title'].str.len()
+    items['len_description'] = items['description'].str.len()
+    items['len_attrsJSON'] = items['attrsJSON'].str.len()
+    
+    print('Merge item 1...')
+    item1 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon', 
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item1 = pd.merge(item1, category, how='left', on='categoryID', left_index=True)
+    item1 = pd.merge(item1, location, how='left', on='locationID', left_index=True)
+
+    item1 = item1.rename(
+        columns={
+            'itemID': 'itemID_1',
+            'categoryID': 'categoryID_1',
+            'parentCategoryID': 'parentCategoryID_1',
+            'price': 'price_1',
+            'locationID': 'locationID_1',
+            'regionID': 'regionID_1',
+            'metroID': 'metroID_1',
+            'lat': 'lat_1',
+            'lon': 'lon_1',
+            'len_title': 'len_title_1',
+            'len_description': 'len_description_1',
+            'len_attrsJSON': 'len_attrsJSON_1'
+        }
+    )
+
+    # Add item 1 data
+    train = pd.merge(train, item1, how='left', on='itemID_1', left_index=True)
+
+    print('Merge item 2...')
+    item2 = items[['itemID', 'categoryID', 'price', 'locationID', 'metroID', 'lat', 'lon',
+    'len_title', 'len_description', 'len_attrsJSON']]
+    item2 = pd.merge(item2, category, how='left', on='categoryID', left_index=True)
+    item2 = pd.merge(item2, location, how='left', on='locationID', left_index=True)
+
+    item2 = item2.rename(
+        columns={
+            'itemID': 'itemID_2',
+            'categoryID': 'categoryID_2',
+            'parentCategoryID': 'parentCategoryID_2',
+            'price': 'price_2',
+            'locationID': 'locationID_2',
+            'regionID': 'regionID_2',
+            'metroID': 'metroID_2',
+            'lat': 'lat_2',
+            'lon': 'lon_2',
+            'len_title': 'len_title_2',
+            'len_description': 'len_description_2',
+            'len_attrsJSON': 'len_attrsJSON_2',
+        }
+    )
+
+    # Add item 2 data
+    train = pd.merge(train, item2, how='left', on='itemID_2', left_index=True)
+
+    # Create same arrays
+    print('Create same arrays')
+    train['price_same'] = np.equal(train['price_1'], train['price_2']).astype(np.int32)
+    train['locationID_same'] = np.equal(train['locationID_1'], train['locationID_2']).astype(np.int32)
+    train['categoryID_same'] = np.equal(train['categoryID_1'], train['categoryID_2']).astype(np.int32)
+    train['regionID_same'] = np.equal(train['regionID_1'], train['regionID_2']).astype(np.int32)
+    train['metroID_same'] = np.equal(train['metroID_1'], train['metroID_2']).astype(np.int32)
+    train['lat_same'] = np.equal(train['lat_1'], train['lat_2']).astype(np.int32)
+    train['lon_same'] = np.equal(train['lon_1'], train['lon_2']).astype(np.int32)
+
+    # print(train.describe())
+    print('Create test data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return train
+
+
+def read_test_train():
+    train = prep_train()
+    test = prep_test()
+    train.fillna(-1, inplace=True)
+    test.fillna(-1, inplace=True)
+    # Get only subset of data
+    if 1:
+        len_old = len(train.index)
+        train = train.sample(frac=0.5)
+        len_new = len(train.index)
+        print('Reduce train from {} to {}'.format(len_old, len_new))
+    features = get_features(train, test)
+    return train, test, features
+
+
+train, test, features = read_test_train()
+print('Length of train: ', len(train))
+print('Length of test: ', len(test))
+print('Features [{}]: {}'.format(len(features), sorted(features)))
+test_prediction, score = run_default_test(train, test, features, 'isDuplicate')
+print('Real score = {}'.format(score))
+create_submission(score, test, test_prediction)
+
+import numpy as np
+np.random.seed(2016)
+import os
+import glob
+import cv2
+import datetime
+import time
+from sklearn.cross_validation import KFold
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.optimizers import Adam
+from keras.optimizers import SGD
+from keras.callbacks import EarlyStopping
+from keras.utils import np_utils
+from sklearn.metrics import log_loss
+
+
+def get_im_cv2(path, img_rows, img_cols):
+    img = cv2.imread(path, 0)
+    resized = cv2.resize(img, (img_cols, img_rows), cv2.INTER_LINEAR)
+    return resized
+
+
+def load_train(img_rows, img_cols):
+    X_train = []
+    X_train_id = []
+    mask_train = []
+    start_time = time.time()
+
+    print('Read train images')
+    files = glob.glob("../input/train/*[0-9].tif")
+    for fl in files:
+        flbase = os.path.basename(fl)
+        img = get_im_cv2(fl, img_rows, img_cols)
+        X_train.append(img)
+        X_train_id.append(flbase[:-4])
+        mask_path = "../input/train/" + flbase[:-4] + "_mask.tif"
+        mask = get_im_cv2(mask_path, img_rows, img_cols)
+        mask_train.append(mask)
+
+    print('Read train data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return X_train, mask_train, X_train_id
+
+
+def load_test(img_rows, img_cols):
+    print('Read test images')
+    files = glob.glob("../input/test/*[0-9].tif")
+    X_test = []
+    X_test_id = []
+    total = 0
+    start_time = time.time()
+    for fl in files:
+        flbase = os.path.basename(fl)
+        img = get_im_cv2(fl, img_rows, img_cols)
+        X_test.append(img)
+        X_test_id.append(flbase[:-4])
+        total += 1
+
+    print('Read test data time: {} seconds'.format(round(time.time() - start_time, 2)))
+    return X_test, X_test_id
+
+
+def rle_encode(img, order='F'):
+    bytes = img.reshape(img.shape[0] * img.shape[1], order=order)
+    runs = []
+    r = 0
+    pos = 1
+    for c in bytes:
+        if c == 0:
+            if r != 0:
+                runs.append((pos, r))
+                pos += r
+                r = 0
+            pos += 1
+        else:
+            r += 1
+
+    if r != 0:
+        runs.append((pos, r))
+        pos += r
+
+    z = ''
+    for rr in runs:
+        z += str(rr[0]) + ' ' + str(rr[1]) + ' '
+    return z[:-1]
+
+
+def find_best_mask():
+    files = glob.glob(os.path.join("..", "input", "train", "*_mask.tif"))
+    overall_mask = cv2.imread(files[0], cv2.IMREAD_GRAYSCALE)
+    overall_mask.fill(0)
+    overall_mask = overall_mask.astype(np.float32)
+
+    for fl in files:
+        mask = cv2.imread(fl, cv2.IMREAD_GRAYSCALE)
+        overall_mask += mask
+    overall_mask /= 255
+    max_value = overall_mask.max()
+    koeff = 0.5
+    overall_mask[overall_mask < koeff * max_value] = 0
+    overall_mask[overall_mask >= koeff * max_value] = 255
+    overall_mask = overall_mask.astype(np.uint8)
+    return overall_mask
+
+
+def create_submission(predictions, test_id, info):
+    sub_file = os.path.join('submission_' + info + '_' + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")) + '.csv')
+    subm = open(sub_file, "w")
+    mask = find_best_mask()
+    encode = rle_encode(mask)
+    subm.write("img,pixels\n")
+    for i in range(len(test_id)):
+        subm.write(str(test_id[i]) + ',')
+        if predictions[i][1] > 0.5:
+            subm.write(encode)
+        subm.write('\n')
+    subm.close()
+
+
+def get_empty_mask_state(mask):
+    out = []
+    for i in range(len(mask)):
+        if mask[i].sum() == 0:
+            out.append(0)
+        else:
+            out.append(1)
+    return np.array(out)
+
+
+def read_and_normalize_train_data(img_rows, img_cols):
+    train_data, train_target, train_id = load_train(img_rows, img_cols)
+    train_data = np.array(train_data, dtype=np.uint8)
+    train_target = np.array(train_target, dtype=np.uint8)
+    train_data = train_data.reshape(train_data.shape[0], 1, img_rows, img_cols)
+    # Convert to 0 or 1
+    train_target = get_empty_mask_state(train_target)
+    train_target = np_utils.to_categorical(train_target, 2)
+    train_data = train_data.astype('float32')
+    train_data /= 255
+    print('Train shape:', train_data.shape)
+    print(train_data.shape[0], 'train samples')
+    return train_data, train_target, train_id
+
+
+def read_and_normalize_test_data(img_rows, img_cols):
+    test_data, test_id = load_test(img_rows, img_cols)
+    test_data = np.array(test_data, dtype=np.uint8)
+    test_data = test_data.reshape(test_data.shape[0], 1, img_rows, img_cols)
+    test_data = test_data.astype('float32')
+    test_data /= 255
+    print('Test shape:', test_data.shape)
+    print(test_data.shape[0], 'test samples')
+    return test_data, test_id
+
+
+def merge_several_folds_mean(data, nfolds):
+    a = np.array(data[0])
+    for i in range(1, nfolds):
+        a += np.array(data[i])
+    a /= nfolds
+    return a.tolist()
+
+
+def create_model(img_rows, img_cols):
+    model = Sequential()
+    model.add(Convolution2D(4, 3, 3, border_mode='same', init='he_normal',
+                            input_shape=(1, img_rows, img_cols)))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.15))
+
+    model.add(Convolution2D(8, 3, 3, border_mode='same', init='he_normal'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.15))
+
+    model.add(Flatten())
+    model.add(Dense(2))
+    model.add(Activation('softmax'))
+
+    sgd = SGD(lr=1e-3, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(optimizer=sgd, loss='categorical_crossentropy')
+    return model
+
+
+def get_validation_predictions(train_data, predictions_valid):
+    pv = []
+    for i in range(len(train_data)):
+        pv.append(predictions_valid[i])
+    return pv
+
+
+def getPredScorePercent(train_target, train_id, predictions_valid):
+    perc = 0
+    for i in range(len(train_target)):
+        pred = 1
+        if predictions_valid[i][0] > 0.5:
+            pred = 0
+        real = 1
+        if train_target[i][0] > 0.5:
+            real = 0
+        if real == pred:
+            perc += 1
+    perc /= len(train_target)
+    return perc
+
+
+def run_cross_validation(nfolds=10):
+    img_rows, img_cols = 32, 32
+    batch_size = 32
+    nb_epoch = 50
+    random_state = 51
+
+    train_data, train_target, train_id = read_and_normalize_train_data(img_rows, img_cols)
+    test_data, test_id = read_and_normalize_test_data(img_rows, img_cols)
+
+    yfull_train = dict()
+    yfull_test = []
+    kf = KFold(len(train_data), n_folds=nfolds, shuffle=True, random_state=random_state)
+    num_fold = 0
+    sum_score = 0
+    for train_index, test_index in kf:
+        model = create_model(img_rows, img_cols)
+        X_train, X_valid = train_data[train_index], train_data[test_index]
+        Y_train, Y_valid = train_target[train_index], train_target[test_index]
+
+        num_fold += 1
+        print('Start KFold number {} from {}'.format(num_fold, nfolds))
+        print('Split train: ', len(X_train), len(Y_train))
+        print('Split valid: ', len(X_valid), len(Y_valid))
+
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=2, verbose=0),
+        ]
+        model.fit(X_train, Y_train, batch_size=batch_size, nb_epoch=nb_epoch,
+              shuffle=True, verbose=2, validation_data=(X_valid, Y_valid),
+              callbacks=callbacks)
+
+        predictions_valid = model.predict(X_valid, batch_size=batch_size, verbose=1)
+        score = log_loss(Y_valid, predictions_valid)
+        print('Score log_loss: ', score)
+
+        # Store valid predictions
+        for i in range(len(test_index)):
+            yfull_train[test_index[i]] = predictions_valid[i]
+
+        # Store test predictions
+        test_prediction = model.predict(test_data, batch_size=batch_size, verbose=2)
+        yfull_test.append(test_prediction)
+
+    predictions_valid = get_validation_predictions(train_data, yfull_train)
+    score = log_loss(train_target, predictions_valid)
+    print("Log_loss train independent avg: ", score)
+
+    print('Final log_loss: {}, rows: {} cols: {} nfolds: {} epoch: {}'.format(score, img_rows, img_cols, nfolds, nb_epoch))
+    perc = getPredScorePercent(train_target, train_id, predictions_valid)
+    print('Percent success: {}'.format(perc))
+
+    info_string = 'loss_' + str(score) \
+                    + '_r_' + str(img_rows) \
+                    + '_c_' + str(img_cols) \
+                    + '_folds_' + str(nfolds) \
+                    + '_ep_' + str(nb_epoch)
+
+    test_res = merge_several_folds_mean(yfull_test, nfolds)
+    create_submission(test_res, test_id, info_string)
+
+
+if __name__ == '__main__':
+    run_cross_validation(10)

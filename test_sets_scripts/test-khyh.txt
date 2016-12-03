@@ -1,0 +1,9 @@
+###########################################################.
+# parameters of this script.
+#input_dir = 'data'.
+###########################################################.
+# main.
+#color_names = [c for c in colors.cnames if ('dark' in c)].
+#color_names = [c for c in colors.cnames if ('deep' in c)].
+#color_names = [c for c in colors.cnames].
+#plt.show()

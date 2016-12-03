@@ -1,0 +1,54 @@
+#note: age_gender_bkts.csv and countries.csv files are not used..
+#########loading data#############.
+#train_users.
+#test_users.
+#sessions.
+#########preparing session data########.
+#filling nan with specific value ('nan').
+#action values with low frequency are changed to 'other'.
+#computing value_counts. these are going to be used in the one-hot encoding.
+#based feature generation (following loop)..
+#grouping session by id. we will compute features from all rows with the same id..
+#loop on dgr_sess to create all the features..
+#the id.
+#the actual first feature is the number of values..
+#action features.
+#(how many times each value occurs, numb of unique values, mean and std).
+#action_detail features.
+#(how many times each value occurs, numb of unique values, mean and std).
+#action_type features.
+#(how many times each value occurs, numb of unique values, mean and std.
+#+ log of the sum of secs_elapsed for each value).
+#device_type features.
+#(how many times each value occurs, numb of unique values, mean and std).
+#secs_elapsed features.
+#simple statistics about the secs_elapsed values..
+#values are grouped in 15 intervals. compute the number of values.
+#in each interval..
+#the list l has the feature values of one sample..
+#creating a dataframe with the computed features.
+#preparing objects.
+#creating the dataframe.
+#########working on train and test data#####################.
+#concatenating df_train and df_test.
+########creating features for train+test.
+#removing date_first_booking.
+#number of nulls.
+#date_account_created.
+#(computing year, month, day, week_number, weekday).
+#timestamp_first_active.
+#(computing year, month, day, hour, week_number, weekday).
+#timespans between dates.
+#(computing absolute number of seconds of difference between dates, sign of the difference).
+#    df_tt['dac_tfa_days'] = np.array([np.sign((dac_dates[i]-tfa_dates[i]).days) for i in range(len(dac_dates))]).
+#comptute seasons from dates.
+#(computing the season for the two dates).
+#df_all['season_dfb'] = np.array([get_season(dt) for dt in dfb_dates]).
+#age.
+#(keeping ages in 14 < age < 99 as ok and grouping others according different kinds of mistakes).
+#agerange.
+#(one-hot encoding of the edge according these intervals).
+#one-hot-encoding features.
+######merging train-test with session data#################.
+#all types of null.
+######computing x, y and x_test ################
